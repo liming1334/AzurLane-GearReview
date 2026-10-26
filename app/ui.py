@@ -332,6 +332,16 @@ class App(tk.Tk):
         """把每个按钮的底图换成「它所在位置的背景模糊 + 半透明染色」。
 
         Tk 没有透明度，所以用预渲染 RGBA 图（圆角 + 高光描边）冒充毛玻璃。
+
+        贴图时必须把按钮自身的 padx/pady 归零：Tk 的 Button 请求尺寸 =
+        图片 + 2×padx + 2×pady，而这里的图片又是按「当前尺寸」生成的，
+        留着内边距就会变成「贴图 → 变宽 → 下次按更宽的尺寸出图 → 再变宽」
+        的正反馈，按钮每按一次长 20px、逐渐错位到点不到。
+        归零后 请求尺寸 == 图片尺寸 == 当前尺寸，重贴是幂等的。
+
+        但归零会让按钮缩到文字宽度（内边距没了），所以先把按钮的自然尺寸
+        （文字 + 原内边距）记在 _glass_nat 上，之后出图都不小于它，
+        把内边距烘进底图里。
         """
         if not HAS_PIL:
             return
@@ -339,11 +349,16 @@ class App(tk.Tk):
             try:
                 if not btn.winfo_ismapped():
                     continue
-                w, h = btn.winfo_width(), btn.winfo_height()
+                if not hasattr(btn, "_glass_nat"):
+                    btn._glass_nat = (btn.winfo_reqwidth(), btn.winfo_reqheight())
+                nat_w, nat_h = btn._glass_nat
+                w = max(btn.winfo_width(), nat_w)
+                h = max(btn.winfo_height(), nat_h)
                 if w < 12 or h < 10:
                     continue
                 photo = self._glass_image(btn, w, h, token)
                 btn.configure(image=photo, compound="center",
+                              padx=0, pady=0,
                               bd=0, highlightthickness=0, relief="flat")
                 btn._glass = photo          # 保持引用，防止被 GC
             except Exception:  # noqa: BLE001
