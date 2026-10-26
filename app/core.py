@@ -82,6 +82,10 @@ ANIM_BY_TYPE = {
 # 强化档位（游戏内实际存在的档位）
 ENHANCE_LEVELS = [0, 3, 6, 7, 10, 11, 13]
 
+# 稀有度 → 可强化的最高档。页面没写任何强化数值时用它兜底。
+# 白色 +3 / 蓝色 +6 / 紫色 +10 / 金色与彩色 +13
+RARITY_MAX_LEVEL = {"白色": 3, "蓝色": 6, "紫色": 10, "金色": 13, "彩色": 13}
+
 # 评分窗口（秒）
 SCORE_WINDOW = 77.0
 
@@ -379,6 +383,16 @@ def parse_page(title: str, text: str) -> dict | None:
             lv_corr[lv] = _num(raw_c)
 
     # 对甲比例：导弹页字段名不同，做一次兜底
+    # 该装备自身的强化上限：扫描页面上所有「强化+Nxxx」字段取最大 N，
+    # 一个都没有时按稀有度兜底。
+    # 这一步很关键：舰载机武器库里存了 +0~+13 全部档位，
+    # 但白色飞机只能强化到 +3，不截断就会取到 +13 的数值。
+    enhance_seen = [int(mm.group(1)) for mm in
+                    (re.match(r"强化\+(\d+)", k) for k in params) if mm]
+    observed = max(enhance_seen) if enhance_seen else 0
+    rarity_max = RARITY_MAX_LEVEL.get(params.get("稀有度", ""), 13)
+    max_level = observed if observed > 0 else rarity_max
+
     armor = parse_armor(params.get("对甲比例") or params.get("导弹先锋对甲比例", ""))
     if not any(armor):
         armor = [100.0, 100.0, 100.0]
@@ -401,6 +415,7 @@ def parse_page(title: str, text: str) -> dict | None:
         "correction": correction,
         "correction_max": corr_max,
         "levels": {"damage": lv_damage, "reload": lv_reload, "correction": lv_corr},
+        "max_level": max_level,
         "ammo": params.get("弹药", ""),
         "traits": params.get("特性", ""),
         "skill_name": params.get("技能名", ""),
@@ -730,9 +745,18 @@ def _mods(params: dict) -> float:
 
 
 def _cycle(item: dict, reload_s: float, params: dict) -> float:
-    """开火间隔 = 装填时间 × √(200/(装填值+100)) + 前摇后摇。"""
+    """开火/出击间隔。
+
+    舰炮类 = 装填时间 × √(200/(装填值+100)) + 前摇后摇
+    舰载机 = 只算出击冷却（没有开火动画）
+    """
     k = math.sqrt(200.0 / (float(params.get("装填值", 100.0)) + 100.0))
-    anim = ANIM_BY_TYPE.get(item["type"], 0.26) if params.get("计入动画", True) else 0.0
+    if item.get("category") == "舰载机":
+        anim = 0.0
+    elif params.get("计入动画", True):
+        anim = ANIM_BY_TYPE.get(item["type"], 0.26)
+    else:
+        anim = 0.0
     return max(k * reload_s + anim, 0.05)
 
 
@@ -754,7 +778,8 @@ def score_gun(item: dict, params: dict, key: str = "轻甲",
     if cat not in ("舰炮", "鱼雷", "防空炮", "导弹"):
         return None
 
-    want = int(params.get("强化等级", 13))
+    want_param = int(params.get("强化等级", 13))
+    want = min(want_param, int(item.get("max_level") or want_param))
     lv = item.get("levels") or {}
     dmg = pick_level(lv.get("damage", {}), want)          # (单发, 弹数)
     reload_s = pick_level(lv.get("reload", {}), want)     # 装填秒
@@ -832,7 +857,8 @@ def score_plane(item: dict, params: dict, window: float | None = None) -> dict:
     """
     if item["category"] != "舰载机":
         return {}
-    want = int(params.get("强化等级", 13))
+    want_param = int(params.get("强化等级", 13))
+    want = min(want_param, int(item.get("max_level") or want_param))
     mounts = item.get("mounts") or {}
     stat, bonus = stat_value(item, params)
     eff = float(params.get("属性效率", 100.0)) / 100.0
@@ -900,7 +926,8 @@ def score_plane(item: dict, params: dict, window: float | None = None) -> dict:
 
 def plane_payload(item: dict, params: dict) -> float:
     """单架次挂载总伤害（不含对甲效率），列表的「单轮基础」列用。"""
-    want = int(params.get("强化等级", 13))
+    want_param = int(params.get("强化等级", 13))
+    want = min(want_param, int(item.get("max_level") or want_param))
     mounts = item.get("mounts") or {}
     stat, _ = stat_value(item, params)
     eff = float(params.get("属性效率", 100.0)) / 100.0

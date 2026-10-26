@@ -23,9 +23,12 @@ CAT = args[0] if args else ""
 OUT = args[1] if len(args) > 1 else r"G:\azur lane\.tmp\shot.png"
 NIGHT = "--night" in flags
 BG = ""
+KW = ""
 for f in flags:
     if f.startswith("--bg="):
         BG = f.split("=", 1)[1]
+    elif f.startswith("--kw="):
+        KW = f.split("=", 1)[1]
 
 
 def setup():
@@ -38,6 +41,9 @@ def setup():
         app.var_cat.set(CAT)
         app._sync_types()
         app.recompute()
+    if KW:
+        app.var_kw.set(KW)
+        app.refresh()
     if BG:
         app._bg_path = BG
         app._load_background()

@@ -33,13 +33,12 @@ import os
 import queue
 import threading
 import tkinter as tk
-import webbrowser
 from tkinter import filedialog, messagebox, ttk
 
 from . import core
 
-try:  # 背景图需要 Pillow（打包时已内置）
-    from PIL import Image, ImageFilter, ImageTk
+try:  # 背景图与毛玻璃按钮需要 Pillow（打包时已内置）
+    from PIL import Image, ImageDraw, ImageFilter, ImageTk
     HAS_PIL = True
 except Exception:  # noqa: BLE001
     HAS_PIL = False
@@ -86,31 +85,31 @@ THEMES = {
     "night": {
         "label": "夜间",
         "window": "#12161d",        # 灰黑
-        "panel": "#1b212b",
+        "panel": "#305973",         # 输入框 / 按钮（用户指定：不要太亮）
         "card": "#222936",
-        "line": "#2f3a4d",
+        "line": "#3a4a5f",
         "header1": "#1d2f4d",       # 深蓝
         "header2": "#0f1a2b",
         "header_fg": "#dbe7f7",
         "header_sub": "#8fb0d4",
-        "text": "#d9e3f0",
-        "muted": "#8b9bb2",
-        "accent": "#5a9bd8",
-        "accent_bg": "#1f2b3d",
+        "text": "#dbe6f3",
+        "muted": "#95a7bd",
+        "accent": "#6fb0e8",
+        "accent_bg": "#26405c",
         "good": "#5fbf8a",
         "good_bg": "#1d2f26",
         "warn": "#e2705f",
         "gold": "#e0b050",
         "tile": "#1d2531",
-        "tile_line": "#2e3b4f",
+        "tile_line": "#33506b",
         "tree_bg": "#1b212b",
-        "tree_head": "#242e3d",
+        "tree_head": "#2b465e",
         "tree_stripe": "#1e2531",
-        "select": "#2c4a6e",
-        "chip1_bg": "#1f2b3d", "chip1_fg": "#7fb6e8",
-        "chip2_bg": "#1d2f26", "chip2_fg": "#6fcb98",
-        "chip3_bg": "#2e2a1c", "chip3_fg": "#e0b050",
-        "chip4_bg": "#2a2233", "chip4_fg": "#b08bdd",
+        "select": "#3f6f92",
+        "chip1_bg": "#26405c", "chip1_fg": "#8fc4f0",
+        "chip2_bg": "#24402f", "chip2_fg": "#6fcb98",
+        "chip3_bg": "#3a3524", "chip3_fg": "#e0b050",
+        "chip4_bg": "#332a40", "chip4_fg": "#b08bdd",
         "status": "#1a2331",
         "status_fg": "#9fb3cc",
         "wall_alpha": 0.42,
@@ -184,6 +183,7 @@ class App(tk.Tk):
         self.theme_key = "day"
         self.theme = THEMES[self.theme_key]
         self._themed: list[tuple[tk.Widget, dict]] = []
+        self._glass_buttons: list[tuple[tk.Button, str]] = []
         self._bg_source = None          # PIL Image
         self._bg_fit = None             # 按窗口尺寸裁切后的 PIL Image
         self._bg_photo = None           # 根窗口底图
@@ -200,6 +200,22 @@ class App(tk.Tk):
         self.after(60, self._init_sash)
         self.after(120, self._poll_queue)
         self.after(200, self._load_background)
+        self.after(420, self._apply_glass_all)
+        self.bind("<Configure>", self._on_root_configure)
+
+    def _on_root_configure(self, event):
+        """窗口尺寸变化：防抖后重铺壁纸与毛玻璃按钮。"""
+        if event.widget is not self:
+            return
+        if getattr(self, "_resize_job", None):
+            self.after_cancel(self._resize_job)
+        self._resize_job = self.after(260, self._after_root_resize)
+
+    def _after_root_resize(self):
+        self._resize_job = None
+        self._render_background()
+        self._update_canvas_wallpaper()
+        self._apply_glass_all()
 
     def _center(self, w, h):
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
@@ -295,6 +311,7 @@ class App(tk.Tk):
 
     def _button(self, parent, text, command, *, bg="accent_bg", fg="accent",
                 hover=None, font=None, padx=10, pady=3):
+        """创建一个按钮，并登记为「毛玻璃」对象（稍后统一贴底图）。"""
         btn = tk.Button(parent, text=text, command=command,
                         bg=self.theme[bg], fg=self.theme[fg],
                         activebackground=self.theme[hover or bg],
@@ -305,7 +322,62 @@ class App(tk.Tk):
         self._themed.append((btn, {"bg": bg, "fg": fg,
                                    "activebackground": hover or bg,
                                    "activeforeground": fg}))
+        self._glass_buttons.append((btn, bg))
         return btn
+
+    # ------------------------------------------------------------------
+    # 毛玻璃按钮
+    # ------------------------------------------------------------------
+    def _apply_glass_all(self):
+        """把每个按钮的底图换成「它所在位置的背景模糊 + 半透明染色」。
+
+        Tk 没有透明度，所以用预渲染 RGBA 图（圆角 + 高光描边）冒充毛玻璃。
+        """
+        if not HAS_PIL:
+            return
+        for btn, token in self._glass_buttons:
+            try:
+                if not btn.winfo_ismapped():
+                    continue
+                w, h = btn.winfo_width(), btn.winfo_height()
+                if w < 12 or h < 10:
+                    continue
+                photo = self._glass_image(btn, w, h, token)
+                btn.configure(image=photo, compound="center",
+                              bd=0, highlightthickness=0, relief="flat")
+                btn._glass = photo          # 保持引用，防止被 GC
+            except Exception:  # noqa: BLE001
+                continue
+
+    def _glass_image(self, btn, w: int, h: int, token: str):
+        t = self.theme
+        # 顶栏按钮压向 header1（保持深色），其余压向自身容器色（保留强调色）
+        tint_token = "header1" if token.startswith("header") else token
+        if self._bg_fit is not None:
+            # 有壁纸：截取按钮下方的那块，重模糊后压一层染色，形成毛玻璃
+            x = btn.winfo_rootx() - self.winfo_rootx()
+            y = btn.winfo_rooty() - self.winfo_rooty()
+            box = (max(x, 0), max(y, 0), max(x, 0) + w, max(y, 0) + h)
+            crop = self._bg_fit.crop(box)
+            if crop.size != (w, h):
+                crop = crop.resize((w, h), Image.LANCZOS)
+            crop = crop.filter(ImageFilter.GaussianBlur(10))
+            alpha = 0.62 if tint_token == "header1" else 0.40
+            base = Image.blend(crop, Image.new("RGB", (w, h), t[tint_token]), alpha)
+        else:
+            base = Image.new("RGB", (w, h), t[token])
+            alpha = 0.30 if tint_token == "header1" else 0.18
+            base = Image.blend(base, Image.new("RGB", (w, h), t[tint_token]), alpha)
+        mask = Image.new("L", (w, h), 0)
+        ImageDraw.Draw(mask).rounded_rectangle([0, 0, w - 1, h - 1], radius=8,
+                                               fill=255)
+        rgba = base.convert("RGBA")
+        rgba.putalpha(mask)
+        border = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        light = (255, 255, 255, 55) if self.theme_key == "night" else (255, 255, 255, 120)
+        ImageDraw.Draw(border).rounded_rectangle([0, 0, w - 1, h - 1], radius=8,
+                                                 outline=light, width=1)
+        return ImageTk.PhotoImage(Image.alpha_composite(rgba, border))
 
     def _apply_theme(self):
         """把所有已登记控件的颜色换成当前主题。"""
@@ -333,6 +405,7 @@ class App(tk.Tk):
         if hasattr(self, "btn_theme"):
             self.btn_theme.configure(
                 text="☀ 白天" if self.theme_key == "night" else "☾ 夜间")
+        self.after(30, self._apply_glass_all)
 
     def toggle_theme(self):
         self.theme_key = "night" if self.theme_key == "day" else "day"
@@ -385,10 +458,12 @@ class App(tk.Tk):
             pass
         self._render_background()
         self._update_canvas_wallpaper()
+        self.after(30, self._apply_glass_all)
 
     def _load_background(self):
         if not self._bg_path or not HAS_PIL:
             self._render_background()
+            self.after(30, self._apply_glass_all)
             return
         try:
             self._bg_source = Image.open(self._bg_path).convert("RGB")
@@ -396,6 +471,7 @@ class App(tk.Tk):
             self._bg_source = None
         self._render_background()
         self._update_canvas_wallpaper()
+        self.after(30, self._apply_glass_all)
 
     def _render_background(self):
         """把背景图按窗口尺寸裁切 + 主题染色，铺到窗口最底层。"""
@@ -618,7 +694,6 @@ class App(tk.Tk):
         wrap.rowconfigure(0, weight=1)
         wrap.columnconfigure(0, weight=1)
         self.tree.bind("<<TreeviewSelect>>", self.on_select)
-        self.tree.bind("<Double-1>", lambda *_: self.open_wiki())
 
     def _build_detail(self, parent):
         # 标题条
@@ -628,12 +703,9 @@ class App(tk.Tk):
         self._themed.append((head, {"bg": "card", "highlightbackground": "line"}))
         self._label(head, "装备详情", bg="card", fg="header1",
                     font=(FONT, 10, "bold")).pack(side="left", padx=12, pady=7)
-        self._button(head, "打开 Wiki", self.open_wiki,
-                     bg="chip1_bg", fg="chip1_fg", hover="select").pack(
-            side="right", padx=(4, 10), pady=7)
         self._button(head, "输出测试", self.open_sim,
                      bg="chip2_bg", fg="chip2_fg", hover="select").pack(
-            side="right", pady=7)
+            side="right", padx=(0, 10), pady=7)
 
         holder = tk.Frame(parent, bg=self.theme["window"],
                           highlightbackground=self.theme["line"], highlightthickness=1)
@@ -830,7 +902,7 @@ class App(tk.Tk):
         self.status.config(
             text=f"共 {len(rows)} 件 · 按「{self.sort_col}」"
                  f"{'降序' if self.sort_desc else '升序'}"
-                 f" · 单击表头排序，双击行打开 Wiki")
+                 f" · 单击表头排序，选中行查看右侧详情")
         kids = self.tree.get_children()
         if kids:
             sel = self.tree.selection()
@@ -959,14 +1031,15 @@ class App(tk.Tk):
 
         # 当前强化档位（用于展示与「已达上限」提示）
         raw = it.get("raw", {})
-        want = int(self.params.get("强化等级", 13))
+        want_param = int(self.params.get("强化等级", 13))
+        # 按装备自身强化上限截断（白色飞机只能到 +3 等）
+        cap = int(it.get("max_level") or want_param)
+        want = min(want_param, cap)
         lv = it.get("levels") or {}
         dmg = core.pick_level(lv.get("damage", {}), want)
         rld = core.pick_level(lv.get("reload", {}), want)
         corr = core.pick_level(lv.get("correction", {}), want)
-        lv_used = max(core.used_level(lv.get("damage", {}), want),
-                      core.used_level(lv.get("reload", {}), want),
-                      core.used_level(lv.get("correction", {}), want))
+        lv_used = want
 
         # ---------- 评分 ----------
         body = self._card("伤害评分")
@@ -1002,7 +1075,7 @@ class App(tk.Tk):
                        if is_plane else "77 秒内累计伤害（首轮 t=0，超时部分丢弃）")
             tk.Label(body, text="评分口径：" + caption, bg=t["card"], fg=t["muted"],
                      font=(FONT, 8)).pack(anchor="w", pady=(9, 0))
-            if lv_used and lv_used < want:
+            if lv_used < want_param:
                 tk.Label(body, text=f"注：该装备最高 +{lv_used}，已按 +{lv_used} 计算",
                          bg=t["card"], fg=t["warn"],
                          font=(FONT, 8)).pack(anchor="w", pady=(3, 0))
@@ -1090,10 +1163,6 @@ class App(tk.Tk):
         self._layout_cards()
         self.canvas.yview_moveto(0.0)
         self._update_canvas_wallpaper()
-    def open_wiki(self):
-        if self.selected:
-            webbrowser.open(self.selected.get("url", ""))
-
     # ------------------------------------------------------------------
     # 输出测试
     # ------------------------------------------------------------------
@@ -1271,13 +1340,13 @@ class App(tk.Tk):
                 w = csv.writer(f)
                 w.writerow(["排名", "名称", "类型", "稀有度", "阵营", "弹药",
                             "单轮基础", "评分·对空", "评分·轻甲", "评分·中甲",
-                            "评分·重甲", "Wiki"])
+                            "评分·重甲"])
                 for i, it in enumerate(self.rows, 1):
                     w.writerow([
                         i, it["name"], it["type"], it["rarity"], it["faction"],
                         it.get("ammo", ""), f"{self._volley_of(it):.2f}",
                         cell(it, "对空"), cell(it, "轻甲"), cell(it, "中甲"),
-                        cell(it, "重甲"), it["url"],
+                        cell(it, "重甲"),
                     ])
             messagebox.showinfo("导出成功", f"已保存到：\n{path}")
         except Exception as exc:  # noqa: BLE001
