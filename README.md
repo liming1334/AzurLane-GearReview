@@ -105,7 +105,7 @@ powershell -File build.ps1 -OneFile # 打包单文件版 → dist\单文件版
 
 ---
 
-## 发布说明（可直接粘贴到 Release 正文）
+## 发布说明
 
 ```
 v1.0 — 首个公开版本
