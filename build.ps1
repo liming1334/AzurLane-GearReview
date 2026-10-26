@@ -1,4 +1,4 @@
-param(
+﻿param(
     [switch]$OneFile
 )
 # 用法：
@@ -16,9 +16,16 @@ $common = @(
     "--noconfirm", "--clean", "--windowed",
     "--name", "碧蓝装备排行",
     "--icon", "$root\assets\app.ico",
+    # 两个数据文件都要带：缺 plane_weapons.json 时舰载机拿不到挂载数值，整类无分
     "--add-data", "$root\data\equipment.json;data",
+    "--add-data", "$root\data\plane_weapons.json;data",
     "--add-data", "$root\assets\app.ico;assets",
     "--add-data", "$root\assets\icons;assets/icons",
+    # numpy/pandas 会被 Pillow 的依赖分析带进来，排除后 49.8 MB，不排除约 77 MB
+    "--exclude-module", "numpy",
+    "--exclude-module", "pandas",
+    "--exclude-module", "matplotlib",
+    "--exclude-module", "scipy",
     "--paths", $root,
     "$root\main.py"
 )
