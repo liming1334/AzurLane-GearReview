@@ -32,6 +32,7 @@ import csv
 import json
 import os
 import queue
+import re
 import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
@@ -861,6 +862,14 @@ class App(tk.Tk):
                 tk.Label(det, text=line, bg=t["card"], fg=t["muted"],
                          font=(FONT, 8), anchor="w").pack(anchor="w")
 
+            # 免责说明：评分只算伤害公式，不打命中/散布
+            note = tk.Label(
+                body,
+                text="仅为理论伤害，实际表现还需要参考索敌范围、索敌角度、弹药射程、散布角度",
+                bg=t["card"], fg=t["warn"], font=(FONT, 8),
+                wraplength=400, justify="left", anchor="w")
+            note.pack(anchor="w", pady=(8, 0))
+
         # ---------- 基础数据 ----------
         body = self._card(f"基础数据（强化 +{lv_used}）" if lv_used else "基础数据")
         pairs = []
@@ -873,8 +882,13 @@ class App(tk.Tk):
         for k in ("炮击", "雷击", "防空", "航空", "弹药", "特性", "对甲比例",
                   "舰载机耐久", "舰载机航速", "舰载机回避上限"):
             v = raw.get(k, "").strip()
-            if v:
-                pairs.append((k, v))
+            if not v:
+                continue
+            if k == "对甲比例":
+                # wiki 写「75-110-75」，游戏里就是 75% / 110% / 75%
+                v = " / ".join(f"{p.strip()}%" for p in re.split(r"[-/／]", v)
+                               if p.strip())
+            pairs.append((k, v))
         if pairs:
             self._kv_grid(body, pairs)
         else:

@@ -115,8 +115,7 @@ class TestRateLevels(unittest.TestCase):
 
 # ---------------------------------------------------------------------------
 # 三、强化上限：白/蓝按稀有度截断，紫及以上不动
-# ---------------------------------------------------------------------------
-class TestEffectiveMaxLevel(unittest.TestCase):
+# ---------------------------------------------------------------------------class TestEffectiveMaxLevel(unittest.TestCase):
     def test_white_is_capped_at_3(self):
         # 「强化+7伤害 = 待补充」占位文本不该把白色顶到 +7
         self.assertEqual(core.effective_max_level("白色", 7), 3)
@@ -143,7 +142,112 @@ class TestEffectiveMaxLevel(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 四、核心回归：装备自身强化上限必须截断武器库数值
+# 四、伤害补正：页面没写时按 wiki 模板的兜底公式补
+# ---------------------------------------------------------------------------
+class TestCorrectionFallback(unittest.TestCase):
+    """wiki 的装备模板对空的「强化+N伤害补正」有 #expr 兜底。
+
+    例：双联装203mmSKC主炮改T0 页面上 `强化+13伤害补正=` 是空的，
+    但 wiki 渲染出来是 130%（110 × 1.18）。只读页面参数会停在 110%。
+    """
+
+    def test_fallback_values(self):
+        self.assertEqual(core.correction_fallback(110, 13), 130.0)
+        self.assertEqual(core.correction_fallback(105, 13), 124.0)
+        self.assertEqual(core.correction_fallback(100, 13), 118.0)
+        self.assertEqual(core.correction_fallback(100, 11), 104.0)
+        self.assertEqual(core.correction_fallback(110, 7), 114.0)
+
+    def test_rounding_is_half_up(self):
+        # MediaWiki 的 round0 是四舍五入，不是 Python 的银行家舍入
+        self.assertEqual(core.correction_fallback(125, 13), 148.0)   # 147.5
+        self.assertEqual(core.correction_fallback(125, 11), 130.0)   # 130.0
+
+    def test_explicit_value_wins(self):
+        params = {"伤害补正": "110", "强化+13伤害补正": "120"}
+        lv = core.build_correction_levels(params, "舰炮", 110.0, "金色")
+        self.assertEqual(lv[13], 120.0)      # 页面写了就用页面的，不套 1.18
+
+    def test_tier_depends_on_rarity(self):
+        # 蓝 → +7、紫 → +11、金/彩 → +13，其余档位不补
+        blue = core.build_correction_levels({"伤害补正": "110"}, "舰炮", 110.0, "蓝色")
+        self.assertEqual(blue, {0: 110.0, 7: 114.0})
+        purple = core.build_correction_levels({"伤害补正": "110"}, "舰炮", 110.0, "紫色")
+        self.assertEqual(purple, {0: 110.0, 11: 114.0})
+        gold = core.build_correction_levels({"伤害补正": "110"}, "舰炮", 110.0, "金色")
+        self.assertEqual(gold, {0: 110.0, 13: 130.0})
+
+    def test_white_gets_no_fallback(self):
+        white = core.build_correction_levels({"伤害补正": "110"}, "舰炮", 110.0, "白色")
+        self.assertEqual(white, {0: 110.0})
+
+    def test_plane_gets_no_fallback(self):
+        # 舰载机模板没有这套兜底
+        plane = core.build_correction_levels({"伤害补正": "100"}, "舰载机", 100.0, "金色")
+        self.assertEqual(plane, {0: 100.0})
+
+    def test_known_skc_case(self):
+        # 双联装203mmSKC主炮改T0：页面 +13 字段为空，实际应为 130%
+        params = {"伤害补正": "110", "强化+13伤害补正": "", "对甲比例": "80-115-75"}
+        lv = core.build_correction_levels(params, "舰炮", 110.0, "金色")
+        self.assertEqual(lv[13], 130.0)
+
+
+# ---------------------------------------------------------------------------
+# 五、对甲比例：wiki 写 75-110-75，即 75% / 110% / 75%，计算时要除以 100
+# ---------------------------------------------------------------------------
+class TestArmorPercent(unittest.TestCase):
+    def test_parse_returns_percent_numbers(self):
+        self.assertEqual(core.parse_armor("75-110-75"), [75.0, 110.0, 75.0])
+        self.assertEqual(core.parse_armor("140-110-90"), [140.0, 110.0, 90.0])
+
+    def test_missing_parts_padded_with_zero(self):
+        self.assertEqual(core.parse_armor("80-115"), [80.0, 115.0, 0.0])
+
+    def test_score_uses_fraction_of_percent(self):
+        # 对甲比例 110% 要按 1.10 参与计算，不是 110
+        params = core.default_params()
+        params["计入动画"] = False
+        item = make_gun(armor=(75.0, 110.0, 75.0))
+        res = core.score_gun(item, params, key="中甲")
+        self.assertAlmostEqual(res["armor_pct"], 1.10, places=6)
+        self.assertAlmostEqual(res["volley"], res["volley_raw"] * 1.10, places=6)
+        light = core.score_gun(item, params, key="轻甲")
+        self.assertAlmostEqual(light["armor_pct"], 0.75, places=6)
+
+    def test_plane_mount_armor_is_percent(self):
+        item = make_plane(max_level=13, dmg={0: 10.0})
+        item["mounts"]["bomb"] = [{"name": "500lb炸弹T1", "count": 2,
+                                   "damage": {0: 100.0}, "armor": [80.0, 85.0, 100.0]}]
+        res = core.score_plane(item, core.default_params())
+        # 单架次对甲：100 × 2 × 0.80 × (1 + 1 × 1 × 0.8) = 288
+        self.assertAlmostEqual(res["轻甲"]["per_sortie"], 288.0, places=6)
+
+
+# ---------------------------------------------------------------------------
+# 六、动画查表：类型名必须和数据类型完全一致
+# ---------------------------------------------------------------------------
+class TestAnimTable(unittest.TestCase):
+    def test_submarine_torpedo_key_exists(self):
+        # 之前写成 "潜艇鱼"，31 件潜艇鱼雷一直吃默认 0.26，比应有的 0.20 慢
+        self.assertEqual(core.ANIM_BY_TYPE.get("潜艇鱼雷"), 0.20)
+        self.assertNotIn("潜艇鱼", core.ANIM_BY_TYPE)
+
+    def test_all_gun_and_torpedo_types_covered(self):
+        wanted = {"驱逐炮", "轻巡炮", "重巡炮", "大口径重巡炮", "战列炮",
+                  "导弹", "水面鱼雷", "潜艇鱼雷", "防空炮"}
+        self.assertEqual(wanted - set(core.ANIM_BY_TYPE), set())
+
+    def test_submarine_torpedo_cycle_uses_point_two(self):
+        params = core.default_params()
+        item = make_gun(dmg=(100.0, 3.0), reload=4.0, category="鱼雷",
+                        type_="潜艇鱼雷", armor=(80.0, 100.0, 100.0))
+        res = core.score_gun(item, params)
+        self.assertAlmostEqual(res["cycle"], 4.0 + 0.20, places=6)
+
+
+# ---------------------------------------------------------------------------
+# 七、核心回归：装备自身强化上限必须截断武器库数值
 # ---------------------------------------------------------------------------
 class TestMaxLevelTruncation(unittest.TestCase):
     """第 9 轮修的 bug：F4F野猫T1 白色只能 +3，武器库却有 +0~+13。
@@ -188,7 +292,7 @@ class TestMaxLevelTruncation(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 四、舰炮 / 防空炮的 77 秒口径
+# 八、舰炮 / 防空炮的 77 秒口径
 # ---------------------------------------------------------------------------
 class TestGunScoring(unittest.TestCase):
     def test_shots_count_includes_first_volley(self):
@@ -246,7 +350,7 @@ class TestGunScoring(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 五、舰载机挂载口径
+# 九、舰载机挂载口径
 # ---------------------------------------------------------------------------
 class TestPlaneMounts(unittest.TestCase):
     def test_weapon_efficiency_bombs_80pct_rockets_100pct(self):
@@ -279,7 +383,7 @@ class TestPlaneMounts(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 六、数据体检（需要本地缓存，缺了自动跳过）
+# 十、数据体检（需要本地缓存，缺了自动跳过）
 # ---------------------------------------------------------------------------
 class TestDataIntegrity(unittest.TestCase):
     @classmethod
@@ -341,6 +445,28 @@ class TestDataIntegrity(unittest.TestCase):
         core.score_all(items, core.default_params())
         missing = [i["name"] for i in items if not i["score"]]
         self.assertEqual(missing, [])
+
+    def test_skc_gun_has_plus13_correction(self):
+        # 页面 +13 补正字段为空，靠模板兜底应为 130%
+        it = [i for i in self.items if i["name"] == "双联装203mmSKC主炮改T0"]
+        self.assertEqual(len(it), 1)
+        lv = core._int_keys(it[0]["levels"]["correction"])
+        self.assertEqual(lv[13], 130.0)
+
+    def test_correction_tier_present_for_max_level(self):
+        # 参与评分的四大类，每件都必须有自己稀有度对应的补正档位
+        # （页面写了就用页面的，没写就用模板兜底）。舰载机的补正不进评分，不查。
+        bad = []
+        for i in self.items:
+            if i["category"] not in core.CORRECTION_FALLBACK_CATEGORIES:
+                continue
+            tier = core.CORRECTION_TIER_BY_RARITY.get(i["rarity"])
+            if not tier:
+                continue
+            lv = core._int_keys(i["levels"].get("correction") or {})
+            if tier not in lv:
+                bad.append((i["name"], i["rarity"], tier))
+        self.assertEqual(bad, [])
 
     def test_rarity_fallback_covers_all_rarities(self):
         # RARITY_MAX_LEVEL 是「页面一个强化字段都没有」时的兜底，

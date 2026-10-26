@@ -75,9 +75,20 @@ ANIM_BY_TYPE = {
     "战列炮": 0.0,     # 跨射无抬手
     "导弹": 0.0,
     "水面鱼雷": 0.20,
-    "潜艇鱼": 0.20,
+    "潜艇鱼雷": 0.20,
     "防空炮": 0.0,
 }
+
+# wiki 模板对「空的强化伤害补正」有兜底公式（舰炮 / 鱼雷 / 导弹 / 防空炮图鉴一致）：
+#     +7 / +11 → round(伤害补正 × 1.04)
+#     +13      → round(伤害补正 × 1.18)
+# 但每件装备只会在自己稀有度对应的那一档涨补正：
+#     蓝色 +7、紫色 +11、金色 / 彩色 +13（白色没有）
+# 例：双联装203mmSKC主炮改T0 基础 110%、页面没写 +13 → wiki 渲染出来是 130%，
+# 只读页面参数会停在 110%，白白少一大截伤害。
+CORRECTION_FALLBACK = {7: 1.04, 11: 1.04, 13: 1.18}
+CORRECTION_TIER_BY_RARITY = {"蓝色": 7, "紫色": 11, "金色": 13, "彩色": 13}
+CORRECTION_FALLBACK_CATEGORIES = {"舰炮", "鱼雷", "防空炮", "导弹"}
 
 # 强化档位（游戏内实际存在的档位）
 ENHANCE_LEVELS = [0, 3, 6, 7, 10, 11, 13]
@@ -343,13 +354,46 @@ def parse_damage(value: str) -> tuple[float, float]:
 
 
 def parse_armor(value: str) -> list[float]:
-    """解析对甲比例 '120-60-60' → [轻, 中, 重]（百分数）。缺失补 0。"""
+    """解析对甲比例 '120-60-60' → [轻, 中, 重]（百分数）。缺失补 0。
+
+    wiki 写 `对甲比例=75-110-75`，表示 75% / 110% / 75%，即按百分数存储。
+    真正参与计算时会除以 100（见 score_gun 的 armor_pct 与 score_plane 的 pct）。
+    """
     v = _clean(value)
     parts = [p for p in re.split(r"[-/／]", v) if p.strip()]
     out = [_num(p) for p in parts[:3]]
     while len(out) < 3:
         out.append(0.0)
     return out
+
+
+def correction_fallback(base: float, level: int) -> float | None:
+    """强化档位缺失时的补正兜底，对应 wiki 模板里的 #expr（四舍五入）。"""
+    factor = CORRECTION_FALLBACK.get(level)
+    if factor is None:
+        return None
+    return float(int(base * factor + 0.5))
+
+
+def build_correction_levels(params: dict, category: str, base: float,
+                            rarity: str = "") -> dict:
+    """构建 {档位: 伤害补正%}。
+
+    - 页面上写了 `强化+N伤害补正` 就照抄（可能出现在任何档位）；
+    - 没写的那一档，按该稀有度真正的补正档位（蓝 7 / 紫 11 / 金彩 13）套兜底公式；
+    - 只有舰炮/鱼雷/导弹/防空炮的模板有这套兜底，舰载机没有。
+    """
+    levels = {0: base}
+    for lv in (3, 6, 7, 10, 11, 13):
+        raw_c = (params.get(f"强化+{lv}伤害补正") or "").strip()
+        if raw_c:
+            levels[lv] = _num(raw_c)
+    tier = CORRECTION_TIER_BY_RARITY.get(rarity)
+    if tier and category in CORRECTION_FALLBACK_CATEGORIES and tier not in levels:
+        fb = correction_fallback(base, tier)
+        if fb is not None:
+            levels[tier] = fb
+    return levels
 
 
 def parse_page(title: str, text: str) -> dict | None:
@@ -388,26 +432,7 @@ def parse_page(title: str, text: str) -> dict | None:
                       or params.get("强化+10射速") or params.get("标准射速", ""))
 
     correction = _num(params.get("伤害补正", "100"), 100.0)
-    corr_max = _num(params.get("强化+13伤害补正") or params.get("强化+11伤害补正")
-                    or params.get("强化+7伤害补正") or "", 0.0) or correction
 
-    # ---- 逐级强化数值（0 = 无强化）----
-    # 页面上不一定每档都写，缺档时评分阶段会回退到「不高于目标档的最高档」
-    lv_damage = {0: (dmg, cnt)}
-    lv_reload = {0: reload_s} if reload_s else {}
-    lv_corr = {0: correction}
-    for lv in (3, 6, 7, 10, 11, 13):
-        raw_d = params.get(f"强化+{lv}伤害", "")
-        if raw_d.strip():
-            lv_damage[lv] = parse_damage(raw_d)
-        raw_r = params.get(f"强化+{lv}射速", "")
-        if raw_r.strip():
-            lv_reload[lv] = _num(raw_r)
-        raw_c = params.get(f"强化+{lv}伤害补正", "")
-        if raw_c.strip():
-            lv_corr[lv] = _num(raw_c)
-
-    # 对甲比例：导弹页字段名不同，做一次兜底
     # 该装备自身的强化上限：扫描页面上所有「强化+Nxxx」字段取最大 N，
     # 一个都没有时按稀有度兜底。见 effective_max_level()。
     enhance_seen = [int(mm.group(1)) for mm in
@@ -415,6 +440,23 @@ def parse_page(title: str, text: str) -> dict | None:
     obs_level = max(enhance_seen) if enhance_seen else 0
     rarity = params.get("稀有度", "")
     max_level = effective_max_level(rarity, obs_level)
+
+    # ---- 逐级强化数值（0 = 无强化）----
+    # 页面上不一定每档都写，缺档时评分阶段会回退到「不高于目标档的最高档」；
+    # 伤害补正另有模板兜底，见 build_correction_levels。
+    lv_damage = {0: (dmg, cnt)}
+    lv_reload = {0: reload_s} if reload_s else {}
+    lv_corr = build_correction_levels(params, category, correction, rarity)
+    for lv in (3, 6, 7, 10, 11, 13):
+        raw_d = params.get(f"强化+{lv}伤害", "")
+        if raw_d.strip():
+            lv_damage[lv] = parse_damage(raw_d)
+        raw_r = params.get(f"强化+{lv}射速", "")
+        if raw_r.strip():
+            lv_reload[lv] = _num(raw_r)
+
+    # 满强化时的补正（含模板兜底），详情里展示用
+    corr_max = pick_level(lv_corr, max_level) or correction
 
     armor = parse_armor(params.get("对甲比例") or params.get("导弹先锋对甲比例", ""))
     if not any(armor):
