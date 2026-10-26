@@ -89,6 +89,11 @@ RARITY_MAX_LEVEL = {"白色": 3, "蓝色": 6, "紫色": 10, "金色": 13, "彩�
 # 评分窗口（秒）
 SCORE_WINDOW = 77.0
 
+# 舰载机机枪射速的换算基数：wiki 数据库里的射速按「发/分」记录，
+# 除以它得到「发/秒」，再乘单发伤害即为该机枪的每秒输出当量。
+# 若日后确认 wiki 用的是别的单位，改这一个常数即可（不影响排名以外的口径）。
+MG_RATE_UNIT = 60.0
+
 ARMOR_KEYS = ("轻甲", "中甲", "重甲")
 
 
@@ -542,6 +547,24 @@ _MOUNT_RE = re.compile(r"^\s*(\d+)\s*[x×]\s*(.+)$")
 MOUNT_FIELDS = (("机枪", "mg"), ("炸弹", "bomb"), ("鱼雷", "torp"))
 
 
+def _rate_levels(raw: list) -> dict:
+    """把「75,,,70,,,66,64,,,60」这类射速列表转成 {档位: 发/分}。
+
+    与伤害列表同构：14 个槽位对应 +0 ~ +13，空位表示该档没有数据；
+    数值保持 wiki 的「发/分」原样，换算成发/秒在评分时再做（见 MG_RATE_UNIT）。
+    """
+    out = {}
+    for i, s in enumerate(raw or []):
+        s = str(s).strip()
+        if not s or s in ("？", "?", "-"):
+            continue
+        try:
+            out[i] = float(s)
+        except ValueError:
+            continue
+    return out
+
+
 def attach_plane_mounts(items: list[dict], db: dict) -> None:
     """把舰载机的『4 x 1000lb 炸弹T0』这类挂载串解析成真实武器数值。
 
@@ -568,6 +591,7 @@ def attach_plane_mounts(items: list[dict], db: dict) -> None:
                     continue
                 row = {"name": name, "count": count, "damage": entry.get("damage", {})}
                 if kind == "mg":
+                    row["rate"] = _rate_levels(entry.get("rate") or [])
                     row["range"] = entry.get("range", "")
                     row["angle"] = entry.get("angle", "")
                 else:
