@@ -15,6 +15,9 @@ data/background.*
 data/装备排行.csv
 .tmp/
 
+# 用户放进来的原图（assets/app_source.jpg 是入库的正式副本）
+azur lane.jpg
+
 # Python
 __pycache__/
 *.py[cod]

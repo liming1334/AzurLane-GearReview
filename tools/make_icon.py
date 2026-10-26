@@ -1,39 +1,60 @@
 # -*- coding: utf-8 -*-
-"""生成应用图标 assets/app.ico。"""
+"""从原始图片生成应用图标 assets/app.ico 与 assets/app.png。
+
+用法:
+    python tools/make_icon.py [源图路径]
+
+默认源图是项目根目录下的 `azur lane.jpg`。
+生成的 ico 含 16/24/32/48/64/128/256 七个尺寸：
+  * 256 是资源管理器大图标 / 任务栏高 DPI 用
+  * 32/16 是标题栏与任务栏常规尺寸用
+缺小尺寸时 Windows 只能靠缩放，会糊。
+"""
 import os
+import sys
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 
-OUT = r"G:\azur lane\assets"
-os.makedirs(OUT, exist_ok=True)
-SIZE = 256
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ASSETS = os.path.join(ROOT, "assets")
+SIZES = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
 
-img = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
-d = ImageDraw.Draw(img)
 
-# 深蓝圆底 + 渐变描边
-for i in range(SIZE // 2, 0, -1):
-    t = i / (SIZE / 2)
-    r = int(31 + (58 - 31) * (1 - t))
-    g = int(58 + (111 - 58) * (1 - t))
-    b = int(95 + (181 - 95) * (1 - t))
-    d.ellipse([SIZE / 2 - i, SIZE / 2 - i, SIZE / 2 + i, SIZE / 2 + i], fill=(r, g, b, 255))
+def default_source() -> str:
+    """默认源图：优先项目根目录的 `azur lane.jpg`，其次是 assets 里的那份。"""
+    for cand in (os.path.join(ROOT, "azur lane.jpg"),
+                 os.path.join(ASSETS, "app_source.jpg")):
+        if os.path.exists(cand):
+            return cand
+    return os.path.join(ROOT, "azur lane.jpg")
 
-d.ellipse([16, 16, SIZE - 16, SIZE - 16], outline=(255, 255, 255, 90), width=4)
 
-# 主炮剪影
-barrel = [(128, 60), (150, 60), (150, 150), (128, 150)]
-d.polygon([(120, 52), (156, 52), (150, 96), (126, 96)], fill=(255, 255, 255, 235))
-d.rectangle([116, 104, 160, 132], fill=(255, 255, 255, 235))
-d.ellipse([100, 128, 176, 200], fill=(255, 255, 255, 235))
-d.ellipse([124, 152, 152, 180], fill=(31, 58, 95, 255))
+SRC = sys.argv[1] if len(sys.argv) > 1 else default_source()
 
-# 底部刻度（排行意象）
-for i, h in enumerate([12, 22, 34]):
-    x = 66 + i * 46
-    d.rectangle([x, 224 - h, x + 30, 224], fill=(255, 255, 255, 220))
 
-img.save(os.path.join(OUT, "app.ico"),
-         sizes=[(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
-img.save(os.path.join(OUT, "app.png"))
-print("icon ->", os.path.join(OUT, "app.ico"))
+def load_square(path: str) -> Image.Image:
+    """读图并居中裁成正方形（ico 只能是方的，非方图会被拉伸变形）。"""
+    img = Image.open(path).convert("RGBA")
+    w, h = img.size
+    side = min(w, h)
+    left, top = (w - side) // 2, (h - side) // 2
+    img = img.crop((left, top, left + side, top + side))
+    return img.resize((256, 256), Image.LANCZOS)
+
+
+def main() -> int:
+    if not os.path.exists(SRC):
+        print("找不到源图:", SRC)
+        return 1
+    os.makedirs(ASSETS, exist_ok=True)
+    base = load_square(SRC)
+    ico = os.path.join(ASSETS, "app.ico")
+    base.save(ico, sizes=SIZES)
+    base.save(os.path.join(ASSETS, "app.png"))
+    print("源图:", SRC)
+    print("图标:", ico, os.path.getsize(ico), "bytes | 尺寸:", SIZES)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

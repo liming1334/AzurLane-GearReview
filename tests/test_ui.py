@@ -128,5 +128,47 @@ class TestUi(unittest.TestCase):
             self.assertEqual(str(w.cget("image")), "", "按钮不该再挂毛玻璃底图")
 
 
+class TestAppIcon(unittest.TestCase):
+    """图标必须真的可用。
+
+    第 14 轮的问题：Tk 的 iconbitmap 在打包后静默失败，窗口/任务栏退回
+    Tk 默认的羽毛图标，而 exe 文件图标其实一直是好的（Explorer 缓存误导）。
+    现在除了 iconbitmap 还会用 Win32 的 WM_SETICON 兜底。
+    """
+
+    def test_ico_file_has_all_sizes(self):
+        try:
+            from PIL import Image
+        except Exception as exc:  # noqa: BLE001
+            raise unittest.SkipTest(f"没有 Pillow：{exc}")
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "assets", "app.ico")
+        self.assertTrue(os.path.exists(path), "assets/app.ico 不存在")
+        ico = Image.open(path)
+        sizes = set(ico.ico.sizes())
+        for need in ((16, 16), (32, 32), (48, 48), (256, 256)):
+            self.assertIn(need, sizes, f"ico 缺少 {need[0]}x{need[1]} 尺寸")
+
+    def test_app_has_window_icon_hook(self):
+        from app.ui import App
+        self.assertTrue(callable(getattr(App, "_apply_window_icon", None)),
+                        "App 应该提供 _apply_window_icon（iconbitmap 在 exe 里会失效）")
+
+    def test_apply_window_icon_does_not_raise(self):
+        try:
+            from app.ui import App
+        except Exception as exc:  # noqa: BLE001
+            raise unittest.SkipTest(f"无法导入界面：{exc}")
+        try:
+            app = App()
+        except Exception as exc:  # noqa: BLE001
+            raise unittest.SkipTest(f"界面初始化失败：{exc}")
+        try:
+            app.update()
+            app._apply_window_icon()
+        finally:
+            app.destroy()
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

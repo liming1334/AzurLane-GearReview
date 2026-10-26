@@ -185,6 +185,8 @@ class App(tk.Tk):
         self._load_data()
         self.after(60, self._init_sash)
         self.after(120, self._poll_queue)
+        # 窗口映射后再补一次图标：Tk 建窗后会重置类图标，只设一次容易被覆盖
+        self.after(300, self._apply_window_icon)
 
     def _center(self, w, h):
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
@@ -328,13 +330,45 @@ class App(tk.Tk):
     # ------------------------------------------------------------------
     # 布局
     # ------------------------------------------------------------------
-    def _build_ui(self):
+    def _apply_window_icon(self):
+        """设置窗口图标（标题栏 + 任务栏）。
+
+        Tk 的 iconbitmap 在打包后并不总是生效：实测 exe 里窗口会退回 Tk 默认的
+        羽毛图标，而且 Tcl 抛的异常会被上层 try 吞掉，看起来「没报错但没生效」。
+        所以这里再补一次 Win32 的 WM_SETICON：用 LoadImageW 直接读 ico，
+        绕开 Tcl 的 ico 读取实现；同时设置大/小两个尺寸，任务栏与标题栏各取所需。
+        """
+        ico = os.path.join(core._bundle_dir(), "assets", "app.ico")
+        if not os.path.exists(ico):
+            return
         try:
-            ico = os.path.join(core._bundle_dir(), "assets", "app.ico")
-            if os.path.exists(ico):
-                self.iconbitmap(ico)
+            self.iconbitmap(ico)
         except Exception:  # noqa: BLE001
             pass
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            user32 = ctypes.windll.user32
+            user32.LoadImageW.argtypes = [wintypes.HINSTANCE, wintypes.LPCWSTR,
+                                          wintypes.UINT, ctypes.c_int,
+                                          ctypes.c_int, wintypes.UINT]
+            user32.LoadImageW.restype = wintypes.HANDLE
+            user32.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT,
+                                            wintypes.WPARAM, wintypes.LPARAM]
+            image_icon, lr_loadfromfile = 1, 0x10
+            wm_seticon, icon_big, icon_small = 0x0080, 1, 0
+            hwnd = int(self.wm_frame(), 16)
+            for size, kind in ((32, icon_big), (16, icon_small)):
+                handle = user32.LoadImageW(None, ico, image_icon, size, size,
+                                           lr_loadfromfile)
+                if handle:
+                    user32.SendMessageW(hwnd, wm_seticon, kind, handle)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _build_ui(self):
+        self._apply_window_icon()
 
         # ---- 顶栏 ----
         self.header = tk.Frame(self, bg=self.theme["header1"], height=56)
@@ -1165,6 +1199,12 @@ def run():
     try:  # 高 DPI 下保持字体清晰
         import ctypes
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
+    except Exception:  # noqa: BLE001
+        pass
+    try:  # 任务栏分组身份：不设时 Windows 可能把窗口并到别的进程按钮上
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            "AzurLane.EquipRank.Tool")
     except Exception:  # noqa: BLE001
         pass
     app = App()

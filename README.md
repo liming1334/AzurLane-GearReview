@@ -1,7 +1,11 @@
 # 碧蓝航线 · 装备性能排行工具
 
+![应用图标](assets/app.png)
+
 抓取 [碧蓝航线 WIKI](https://wiki.biligame.com/blhx/%E8%A3%85%E5%A4%87%E5%9B%BE%E9%89%B4) 的全部装备数据，
 按伤害公式计算 **77 秒窗口内的累计伤害** 并自动排序，带图标、网页同款详情与白天/夜间主题。
+
+仓库：[liming1334/AzurLane-GearReview](https://github.com/liming1334/AzurLane-GearReview)
 
 ![白天主题](assets/preview.png)
 
@@ -66,6 +70,7 @@ main.py         入口（--selftest 联网自检）
 tests/          回归测试（核心逻辑 + 界面，标准库 unittest，离线可跑）
 docs/           计算逻辑 / 开发文档
 tools/          抓取、图标、截图与端到端测试脚本
+  make_icon.py  从原图生成 assets/app.ico（16~256 七个尺寸）
 build.ps1       打包脚本
 ```
 
