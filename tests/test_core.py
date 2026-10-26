@@ -114,7 +114,36 @@ class TestRateLevels(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 三、核心回归：装备自身强化上限必须截断武器库数值
+# 三、强化上限：白/蓝按稀有度截断，紫及以上不动
+# ---------------------------------------------------------------------------
+class TestEffectiveMaxLevel(unittest.TestCase):
+    def test_white_is_capped_at_3(self):
+        # 「强化+7伤害 = 待补充」占位文本不该把白色顶到 +7
+        self.assertEqual(core.effective_max_level("白色", 7), 3)
+        self.assertEqual(core.effective_max_level("白色", 13), 3)
+        self.assertEqual(core.effective_max_level("白色", 3), 3)
+
+    def test_blue_is_capped_at_6(self):
+        # 补正多写一档（+7）、或留空的 +13 字段，都不代表装备能到那档
+        self.assertEqual(core.effective_max_level("蓝色", 7), 6)
+        self.assertEqual(core.effective_max_level("蓝色", 13), 6)
+        self.assertEqual(core.effective_max_level("蓝色", 6), 6)
+
+    def test_purple_and_above_untouched(self):
+        # 口径未定，紫色及以上仍按页面原值
+        self.assertEqual(core.effective_max_level("紫色", 11), 11)
+        self.assertEqual(core.effective_max_level("紫色", 13), 13)
+        self.assertEqual(core.effective_max_level("金色", 13), 13)
+        self.assertEqual(core.effective_max_level("彩色", 13), 13)
+
+    def test_no_enhancement_fields_falls_back_to_rarity(self):
+        self.assertEqual(core.effective_max_level("白色", 0), 3)
+        self.assertEqual(core.effective_max_level("蓝色", 0), 6)
+        self.assertEqual(core.effective_max_level("紫色", 0), 10)
+
+
+# ---------------------------------------------------------------------------
+# 四、核心回归：装备自身强化上限必须截断武器库数值
 # ---------------------------------------------------------------------------
 class TestMaxLevelTruncation(unittest.TestCase):
     """第 9 轮修的 bug：F4F野猫T1 白色只能 +3，武器库却有 +0~+13。
@@ -280,10 +309,38 @@ class TestDataIntegrity(unittest.TestCase):
 
     def test_max_level_is_a_known_tier(self):
         # 强化档位只有这几档；出现别的值说明页面解析串位了
-        valid = {3, 6, 7, 10, 11, 13}
+        valid = set(core.ENHANCE_LEVELS) - {0}
         bad = [(i["name"], i["max_level"]) for i in self.items
                if int(i["max_level"]) not in valid]
         self.assertEqual(bad, [])
+
+    def test_white_and_blue_never_exceed_rarity_cap(self):
+        # 第 11 轮：白/蓝按稀有度上限截断（蓝 62 件 +7、6 件空字段 13、白 1 件 7）
+        over = [(i["name"], i["rarity"], i["max_level"]) for i in self.items
+                if i.get("rarity") in ("白色", "蓝色")
+                and int(i["max_level"]) > core.RARITY_MAX_LEVEL[i["rarity"]]]
+        self.assertEqual(over, [])
+
+    def test_known_blue_cases_capped(self):
+        cases = {"305mm连装炮T0": 6,        # 补正写到 +7
+                 "四联装340mm主炮Mle1912T3": 6,  # 空的 +13 字段
+                 "三联装610mm鱼雷T2": 6}   # 旧代码在 +7 上取到垃圾值 → 整件无分
+        for name, want in cases.items():
+            it = [i for i in self.items if i["name"] == name]
+            self.assertEqual(len(it), 1, name)
+            self.assertEqual(it[0]["max_level"], want, name)
+
+    def test_known_white_case_capped(self):
+        it = [i for i in self.items if i["name"] == "410mm连装炮T1"]
+        self.assertEqual(len(it), 1)
+        self.assertEqual(it[0]["max_level"], 3)   # 「强化+7伤害 = 待补充」
+
+    def test_every_item_gets_scored(self):
+        # 档位取到空值会让整件装备静默无分，必须一件不漏
+        items = [dict(i, score={}) for i in self.items]
+        core.score_all(items, core.default_params())
+        missing = [i["name"] for i in items if not i["score"]]
+        self.assertEqual(missing, [])
 
     def test_rarity_fallback_covers_all_rarities(self):
         # RARITY_MAX_LEVEL 是「页面一个强化字段都没有」时的兜底，

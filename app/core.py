@@ -86,6 +86,26 @@ ENHANCE_LEVELS = [0, 3, 6, 7, 10, 11, 13]
 # 白色 +3 / 蓝色 +6 / 紫色 +10 / 金色与彩色 +13
 RARITY_MAX_LEVEL = {"白色": 3, "蓝色": 6, "紫色": 10, "金色": 13, "彩色": 13}
 
+# 需要按稀有度上限截断的稀有度（见 effective_max_level 的说明）
+CAPPED_RARITIES = ("白色", "蓝色")
+
+
+def effective_max_level(rarity: str, observed: int) -> int:
+    """一件装备实际能强化到的最高档。
+
+    observed 是「页面上所有『强化+Nxxx』字段里最大的 N」。它并不可靠：
+      1. 页面偶尔留一个空的「强化+13伤害补正」占位字段，只看键名会虚高到 13；
+      2. 「伤害补正」天生比伤害/射速多一档（蓝色补正写到 +7，伤害与射速只到 +6）；
+      3. 还有写成「待补充」的占位文本（白色那 1 件）。
+    所以白色 / 蓝色按稀有度上限截断；紫色及以上目前仍按页面原值（口径待定）。
+    """
+    cap = RARITY_MAX_LEVEL.get(rarity, 13)
+    if observed <= 0:
+        return cap
+    if rarity in CAPPED_RARITIES:
+        return min(observed, cap)
+    return observed
+
 # 评分窗口（秒）
 SCORE_WINDOW = 77.0
 
@@ -389,14 +409,12 @@ def parse_page(title: str, text: str) -> dict | None:
 
     # 对甲比例：导弹页字段名不同，做一次兜底
     # 该装备自身的强化上限：扫描页面上所有「强化+Nxxx」字段取最大 N，
-    # 一个都没有时按稀有度兜底。
-    # 这一步很关键：舰载机武器库里存了 +0~+13 全部档位，
-    # 但白色飞机只能强化到 +3，不截断就会取到 +13 的数值。
+    # 一个都没有时按稀有度兜底。见 effective_max_level()。
     enhance_seen = [int(mm.group(1)) for mm in
                     (re.match(r"强化\+(\d+)", k) for k in params) if mm]
-    observed = max(enhance_seen) if enhance_seen else 0
-    rarity_max = RARITY_MAX_LEVEL.get(params.get("稀有度", ""), 13)
-    max_level = observed if observed > 0 else rarity_max
+    obs_level = max(enhance_seen) if enhance_seen else 0
+    rarity = params.get("稀有度", "")
+    max_level = effective_max_level(rarity, obs_level)
 
     armor = parse_armor(params.get("对甲比例") or params.get("导弹先锋对甲比例", ""))
     if not any(armor):
