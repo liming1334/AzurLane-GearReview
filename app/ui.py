@@ -7,7 +7,7 @@
 界面结构
 --------
 ┌──────────────────────────────────────────────────────────────┐
-│ 顶栏：标题 / 主题切换 / 背景设置 / 数据时间                    │
+│ 顶栏：标题 / 主题切换 / 数据时间                               │
 ├──────────────────────────────────────────────────────────────┤
 │ 筛选栏：搜索 分类 类型 稀有度 阵营 鱼雷弹药 仅显示可评分        │
 ├──────────────────────────────────────────────────────────────┤
@@ -20,9 +20,10 @@
 --------
 * 主题：白天（白 + 天蓝）/ 夜间（灰黑 + 深蓝），所有颜色集中在 THEMES，
   切换时统一刷新 ttk 样式与已注册控件的背景/前景色。
-* 背景：支持自定义图片（1920×1080 为基准），按窗口尺寸「覆盖裁切」，
-  并按当前主题叠加一层色调，保证前景可读；同时裁一块铺到详情画布上。
 * 详情：卡片式布局，随选中装备重建，因此天然跟随主题。
+  所有卡片放在画布里的**单个**内层 Frame 中，重建时整体销毁，
+  不会像过去那样每开一件就残留一批控件（曾导致详情错位）。
+* 无第三方 UI 依赖：图标用 tk.PhotoImage，不需要 Pillow。
 ==============================================================================
 """
 from __future__ import annotations
@@ -33,15 +34,9 @@ import os
 import queue
 import threading
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import messagebox, ttk
 
 from . import core
-
-try:  # 背景图与毛玻璃按钮需要 Pillow（打包时已内置）
-    from PIL import Image, ImageDraw, ImageFilter, ImageTk
-    HAS_PIL = True
-except Exception:  # noqa: BLE001
-    HAS_PIL = False
 
 FONT = "Microsoft YaHei UI"
 
@@ -80,7 +75,6 @@ THEMES = {
         "chip4_bg": "#f3eefb", "chip4_fg": "#7c4dbb",
         "status": "#dfeefb",
         "status_fg": "#41586f",
-        "wall_alpha": 0.22,         # 背景叠加主题色的比例
     },
     "night": {
         "label": "夜间",
@@ -112,7 +106,6 @@ THEMES = {
         "chip4_bg": "#332a40", "chip4_fg": "#b08bdd",
         "status": "#1a2331",
         "status_fg": "#9fb3cc",
-        "wall_alpha": 0.42,
     },
 }
 
@@ -152,8 +145,6 @@ COLUMNS = [
 
 LEVEL_CHOICES = ["无强化", "+3", "+6", "+7", "+10", "+11", "+13"]
 
-BG_SETTING = "background.json"
-
 
 class App(tk.Tk):
     # ------------------------------------------------------------------
@@ -179,16 +170,10 @@ class App(tk.Tk):
         self._icon_small_cache: dict[str, object] = {}
         self._icon_big_cache: dict[str, object] = {}
 
-        # 主题与背景
+        # 主题
         self.theme_key = "day"
         self.theme = THEMES[self.theme_key]
         self._themed: list[tuple[tk.Widget, dict]] = []
-        self._glass_buttons: list[tuple[tk.Button, str]] = []
-        self._bg_source = None          # PIL Image
-        self._bg_fit = None             # 按窗口尺寸裁切后的 PIL Image
-        self._bg_photo = None           # 根窗口底图
-        self._canvas_wall = None        # 详情画布底图
-        self._bg_path = self._read_bg_setting()
 
         self.params = core.default_params()
         self._load_settings()
@@ -199,23 +184,6 @@ class App(tk.Tk):
         self._load_data()
         self.after(60, self._init_sash)
         self.after(120, self._poll_queue)
-        self.after(200, self._load_background)
-        self.after(420, self._apply_glass_all)
-        self.bind("<Configure>", self._on_root_configure)
-
-    def _on_root_configure(self, event):
-        """窗口尺寸变化：防抖后重铺壁纸与毛玻璃按钮。"""
-        if event.widget is not self:
-            return
-        if getattr(self, "_resize_job", None):
-            self.after_cancel(self._resize_job)
-        self._resize_job = self.after(260, self._after_root_resize)
-
-    def _after_root_resize(self):
-        self._resize_job = None
-        self._render_background()
-        self._update_canvas_wallpaper()
-        self._apply_glass_all()
 
     def _center(self, w, h):
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
@@ -311,7 +279,7 @@ class App(tk.Tk):
 
     def _button(self, parent, text, command, *, bg="accent_bg", fg="accent",
                 hover=None, font=None, padx=10, pady=3):
-        """创建一个按钮，并登记为「毛玻璃」对象（稍后统一贴底图）。"""
+        """创建一个跟随主题的按钮。"""
         btn = tk.Button(parent, text=text, command=command,
                         bg=self.theme[bg], fg=self.theme[fg],
                         activebackground=self.theme[hover or bg],
@@ -322,77 +290,7 @@ class App(tk.Tk):
         self._themed.append((btn, {"bg": bg, "fg": fg,
                                    "activebackground": hover or bg,
                                    "activeforeground": fg}))
-        self._glass_buttons.append((btn, bg))
         return btn
-
-    # ------------------------------------------------------------------
-    # 毛玻璃按钮
-    # ------------------------------------------------------------------
-    def _apply_glass_all(self):
-        """把每个按钮的底图换成「它所在位置的背景模糊 + 半透明染色」。
-
-        Tk 没有透明度，所以用预渲染 RGBA 图（圆角 + 高光描边）冒充毛玻璃。
-
-        贴图时必须把按钮自身的 padx/pady 归零：Tk 的 Button 请求尺寸 =
-        图片 + 2×padx + 2×pady，而这里的图片又是按「当前尺寸」生成的，
-        留着内边距就会变成「贴图 → 变宽 → 下次按更宽的尺寸出图 → 再变宽」
-        的正反馈，按钮每按一次长 20px、逐渐错位到点不到。
-        归零后 请求尺寸 == 图片尺寸 == 当前尺寸，重贴是幂等的。
-
-        但归零会让按钮缩到文字宽度（内边距没了），所以先把按钮的自然尺寸
-        （文字 + 原内边距）记在 _glass_nat 上，之后出图都不小于它，
-        把内边距烘进底图里。
-        """
-        if not HAS_PIL:
-            return
-        for btn, token in self._glass_buttons:
-            try:
-                if not btn.winfo_ismapped():
-                    continue
-                if not hasattr(btn, "_glass_nat"):
-                    btn._glass_nat = (btn.winfo_reqwidth(), btn.winfo_reqheight())
-                nat_w, nat_h = btn._glass_nat
-                w = max(btn.winfo_width(), nat_w)
-                h = max(btn.winfo_height(), nat_h)
-                if w < 12 or h < 10:
-                    continue
-                photo = self._glass_image(btn, w, h, token)
-                btn.configure(image=photo, compound="center",
-                              padx=0, pady=0,
-                              bd=0, highlightthickness=0, relief="flat")
-                btn._glass = photo          # 保持引用，防止被 GC
-            except Exception:  # noqa: BLE001
-                continue
-
-    def _glass_image(self, btn, w: int, h: int, token: str):
-        t = self.theme
-        # 顶栏按钮压向 header1（保持深色），其余压向自身容器色（保留强调色）
-        tint_token = "header1" if token.startswith("header") else token
-        if self._bg_fit is not None:
-            # 有壁纸：截取按钮下方的那块，重模糊后压一层染色，形成毛玻璃
-            x = btn.winfo_rootx() - self.winfo_rootx()
-            y = btn.winfo_rooty() - self.winfo_rooty()
-            box = (max(x, 0), max(y, 0), max(x, 0) + w, max(y, 0) + h)
-            crop = self._bg_fit.crop(box)
-            if crop.size != (w, h):
-                crop = crop.resize((w, h), Image.LANCZOS)
-            crop = crop.filter(ImageFilter.GaussianBlur(10))
-            alpha = 0.62 if tint_token == "header1" else 0.40
-            base = Image.blend(crop, Image.new("RGB", (w, h), t[tint_token]), alpha)
-        else:
-            base = Image.new("RGB", (w, h), t[token])
-            alpha = 0.30 if tint_token == "header1" else 0.18
-            base = Image.blend(base, Image.new("RGB", (w, h), t[tint_token]), alpha)
-        mask = Image.new("L", (w, h), 0)
-        ImageDraw.Draw(mask).rounded_rectangle([0, 0, w - 1, h - 1], radius=8,
-                                               fill=255)
-        rgba = base.convert("RGBA")
-        rgba.putalpha(mask)
-        border = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-        light = (255, 255, 255, 55) if self.theme_key == "night" else (255, 255, 255, 120)
-        ImageDraw.Draw(border).rounded_rectangle([0, 0, w - 1, h - 1], radius=8,
-                                                 outline=light, width=1)
-        return ImageTk.PhotoImage(Image.alpha_composite(rgba, border))
 
     def _apply_theme(self):
         """把所有已登记控件的颜色换成当前主题。"""
@@ -413,130 +311,18 @@ class App(tk.Tk):
             self.lbl_data.configure(fg=t["header_sub"])
         if hasattr(self, "status"):
             self.status.configure(bg=t["status"], fg=t["status_fg"])
-        # 底图与详情画布背景
-        self._render_background()
+        # 详情卡片是按主题色画的，整体重建一次
         if self.selected:
             self.show_detail(self.selected)
         if hasattr(self, "btn_theme"):
             self.btn_theme.configure(
                 text="☀ 白天" if self.theme_key == "night" else "☾ 夜间")
-        self.after(30, self._apply_glass_all)
 
     def toggle_theme(self):
         self.theme_key = "night" if self.theme_key == "day" else "day"
         self._apply_theme()
         self.refresh()
         self.save_settings()
-
-    # ------------------------------------------------------------------
-    # 背景图
-    # ------------------------------------------------------------------
-    def _bg_setting_path(self):
-        return os.path.join(core.data_dir(), BG_SETTING)
-
-    def _read_bg_setting(self):
-        try:
-            with open(self._bg_setting_path(), "r", encoding="utf-8") as f:
-                path = json.load(f).get("path", "")
-            return path if path and os.path.exists(path) else ""
-        except Exception:  # noqa: BLE001
-            return ""
-
-    def choose_background(self):
-        if not HAS_PIL:
-            messagebox.showerror("背景", "缺少 Pillow，无法加载图片")
-            return
-        path = filedialog.askopenfilename(
-            title="选择背景图片（建议 1920×1080）",
-            filetypes=[("图片", "*.jpg *.jpeg *.png *.bmp *.webp"), ("全部", "*.*")])
-        if not path:
-            return
-        try:  # 复制到数据目录，避免原图被移动后失效
-            dst = os.path.join(core.data_dir(), "background" + os.path.splitext(path)[1].lower())
-            with open(path, "rb") as src, open(dst, "wb") as out:
-                out.write(src.read())
-            with open(self._bg_setting_path(), "w", encoding="utf-8") as f:
-                json.dump({"path": dst}, f, ensure_ascii=False)
-            self._bg_path = dst
-            self._load_background()
-        except Exception as exc:  # noqa: BLE001
-            messagebox.showerror("背景", f"加载失败：{exc}")
-
-    def clear_background(self):
-        self._bg_path = ""
-        self._bg_source = None
-        self._bg_fit = None
-        self._bg_photo = None
-        try:
-            os.remove(self._bg_setting_path())
-        except Exception:  # noqa: BLE001
-            pass
-        self._render_background()
-        self._update_canvas_wallpaper()
-        self.after(30, self._apply_glass_all)
-
-    def _load_background(self):
-        if not self._bg_path or not HAS_PIL:
-            self._render_background()
-            self.after(30, self._apply_glass_all)
-            return
-        try:
-            self._bg_source = Image.open(self._bg_path).convert("RGB")
-        except Exception:  # noqa: BLE001
-            self._bg_source = None
-        self._render_background()
-        self._update_canvas_wallpaper()
-        self.after(30, self._apply_glass_all)
-
-    def _render_background(self):
-        """把背景图按窗口尺寸裁切 + 主题染色，铺到窗口最底层。"""
-        t = self.theme
-        if not getattr(self, "bg_label", None):
-            return
-        if not self._bg_source or not HAS_PIL:
-            self.bg_label.place_forget()
-            self.configure(bg=t["window"])
-            return
-        w = max(self.winfo_width(), 320)
-        h = max(self.winfo_height(), 240)
-        img = self._bg_source
-        # 等比缩放到覆盖整个窗口（cover），再居中裁切
-        scale = max(w / img.width, h / img.height)
-        nw, nh = int(img.width * scale + 0.5), int(img.height * scale + 0.5)
-        img = img.resize((nw, nh), Image.LANCZOS)
-        left, top = (nw - w) // 2, (nh - h) // 2
-        img = img.crop((left, top, left + w, top + h))
-        img = img.filter(ImageFilter.GaussianBlur(1.4))
-        # 叠一层主题色，保证前景可读
-        overlay = Image.new("RGB", img.size, t["window"])
-        img = Image.blend(img, overlay, t["wall_alpha"])
-        self._bg_fit = img
-        self._bg_photo = ImageTk.PhotoImage(img)
-        self.bg_label.configure(image=self._bg_photo)
-        self.bg_label.place(x=0, y=0, relwidth=1, relheight=1)
-        self.bg_label.lower()
-
-    def _update_canvas_wallpaper(self):
-        """详情画布也用同一张底图的对应区域，形成「卡片浮在壁纸上」的效果。"""
-        if not hasattr(self, "canvas"):
-            return
-        self.canvas.delete("wall")
-        if not self._bg_fit or not HAS_PIL:
-            self.canvas.configure(bg=self.theme["window"])
-            return
-        try:
-            x = self.canvas.winfo_rootx() - self.winfo_rootx()
-            y = self.canvas.winfo_rooty() - self.winfo_rooty()
-            w = max(self.canvas.winfo_width(), 10)
-            h = max(self.canvas.winfo_height(), 10)
-            box = (max(x, 0), max(y, 0), max(x, 0) + w, max(y, 0) + h)
-            crop = self._bg_fit.crop(box)
-            self._canvas_wall = ImageTk.PhotoImage(crop)
-            self.canvas.create_image(0, 0, anchor="nw", image=self._canvas_wall,
-                                     tags="wall")
-            self.canvas.tag_lower("wall")
-        except Exception:  # noqa: BLE001
-            self.canvas.configure(bg=self.theme["window"])
 
     # ------------------------------------------------------------------
     # 布局
@@ -548,11 +334,6 @@ class App(tk.Tk):
                 self.iconbitmap(ico)
         except Exception:  # noqa: BLE001
             pass
-
-        # 最底层背景图容器（未设置背景时隐藏）
-        self.bg_label = tk.Label(self, bd=0)
-        self.bg_label.place(x=0, y=0, relwidth=1, relheight=1)
-        self.bg_label.lower()
 
         # ---- 顶栏 ----
         self.header = tk.Frame(self, bg=self.theme["header1"], height=56)
@@ -571,16 +352,10 @@ class App(tk.Tk):
                                       bg="header1", fg="header_fg", hover="header2",
                                       padx=10, pady=4)
         self.btn_theme.pack(side="right", padx=4, pady=10)
-        self._button(self.header, "背景", self.choose_background,
-                     bg="header1", fg="header_fg", hover="header2",
-                     padx=10, pady=4).pack(side="right", padx=4, pady=10)
-        self._button(self.header, "清除背景", self.clear_background,
-                     bg="header1", fg="header_fg", hover="header2",
-                     padx=10, pady=4).pack(side="right", padx=4, pady=10)
         self.header_line = tk.Frame(self, bg=self.theme["accent"], height=2)
         self.header_line.pack(fill="x", side="top")
 
-        # ---- 筛选 + 参数（收进一张卡片，四周留白让壁纸透出）----
+        # ---- 筛选 + 参数（收进一张卡片）----
         shell = tk.Frame(self, bg=self.theme["window"],
                          highlightbackground=self.theme["line"], highlightthickness=1)
         self._themed.append((shell, {"bg": "window", "highlightbackground": "line"}))
@@ -732,52 +507,26 @@ class App(tk.Tk):
         self.canvas.configure(yscrollcommand=self.vsb.set)
         self.canvas.pack(side="left", fill="both", expand=True)
         self.vsb.pack(side="right", fill="y")
-        # 详情卡片不用内嵌 Frame，而是逐个挂到画布上，
-        # 这样卡片之间与四周的缝隙能透出壁纸（画布底图）。
-        self._cards: list[tuple[tk.Frame, int]] = []
+        # 所有卡片放进画布里的**单个**内层 Frame：
+        # 重建详情时整块销毁，既不会残留控件（旧实现每开一件漏一批，
+        # 开多了详情内容会错位到屏幕左上角），也省掉逐卡片的坐标重排。
+        self.detail_body = tk.Frame(self.canvas, bg=self.theme["window"])
+        self._detail_win = self.canvas.create_window(
+            (0, 0), anchor="nw", window=self.detail_body, tags="body")
+        self.detail_body.bind(
+            "<Configure>", lambda e: self.canvas.configure(
+                scrollregion=self.canvas.bbox("all")))
         self.canvas.bind("<Configure>", self._on_canvas_resize)
         self.canvas.bind("<Enter>",
                          lambda e: self.canvas.bind_all("<MouseWheel>", self._on_wheel))
         self.canvas.bind("<Leave>", lambda e: self.canvas.unbind_all("<MouseWheel>"))
 
-    def _new_card_frame(self) -> tuple[tk.Frame, tk.Frame]:
-        """新建一张卡片并挂到画布上，返回 (卡片外层, 内容区)。"""
-        t = self.theme
-        frame = tk.Frame(self.canvas, bg=t["card"], highlightbackground=t["line"],
-                         highlightthickness=1)
-        item = self.canvas.create_window((12, 0), anchor="nw", window=frame,
-                                         tags="card")
-        self._cards.append((frame, item))
-        body = tk.Frame(frame, bg=t["card"])
-        body.pack(fill="x", padx=14, pady=12)
-        return frame, body
-
-    def _layout_cards(self):
-        """按当前画布宽度重新排列卡片（宽度变化会改变换行高度）。"""
-        if not hasattr(self, "canvas"):
-            return
-        width = max(self.canvas.winfo_width() - 24, 220)
-        y = 10
-        for frame, item in self._cards:
-            try:
-                self.canvas.itemconfigure(item, width=width)
-                frame.update_idletasks()
-                self.canvas.coords(item, 12, y)
-                y += frame.winfo_reqheight() + 8
-            except tk.TclError:
-                continue
-        self.canvas.configure(scrollregion=(0, 0, width + 24, y + 10))
-
     def _on_canvas_resize(self, event):
-        if not hasattr(self, "_wall_job"):
-            self._wall_job = None
-        if self._wall_job:
-            self.after_cancel(self._wall_job)
-        self._wall_job = self.after(120, self._after_canvas_resize)
-
-    def _after_canvas_resize(self):
-        self._layout_cards()
-        self._update_canvas_wallpaper()
+        """画布变宽变窄时，内层 Frame 跟着改宽（否则卡片不会换行）。"""
+        try:
+            self.canvas.itemconfigure(self._detail_win, width=max(event.width, 10))
+        except tk.TclError:
+            pass
 
     def _on_wheel(self, event):
         self.canvas.yview_scroll(int(-event.delta / 120), "units")
@@ -987,12 +736,15 @@ class App(tk.Tk):
         if item:
             self.selected = item
             self.show_detail(item)
-            self._update_canvas_wallpaper()
 
     def _card(self, title: str | None = None):
         """创建一张卡片：主题色背景 + 描边 + 可选的左侧色条标题。"""
         t = self.theme
-        _frame, body = self._new_card_frame()
+        frame = tk.Frame(self.detail_body, bg=t["card"],
+                         highlightbackground=t["line"], highlightthickness=1)
+        frame.pack(fill="x", padx=12, pady=(0, 8))
+        body = tk.Frame(frame, bg=t["card"])
+        body.pack(fill="x", padx=14, pady=12)
         if title:
             row = tk.Frame(body, bg=t["card"])
             row.pack(fill="x", pady=(0, 9))
@@ -1018,11 +770,12 @@ class App(tk.Tk):
 
     def show_detail(self, it: dict):
         t = self.theme
-        self.canvas.delete("card")
-        self._cards.clear()
+        # 整块清空：销毁上一件装备的所有卡片控件，避免每次点击都残留一层
+        for child in self.detail_body.winfo_children():
+            child.destroy()
 
         # ---------- 头部：图标 + 名称 + 标签 ----------
-        _head, body = self._new_card_frame()
+        body = self._card()
         row = tk.Frame(body, bg=t["card"])
         row.pack(fill="x")
         big = self._load_icon_big(it["name"])
@@ -1175,9 +928,9 @@ class App(tk.Tk):
         else:
             tk.Label(body, text="—", bg=t["card"], fg=t["muted"]).pack(anchor="w")
 
-        self._layout_cards()
         self.canvas.yview_moveto(0.0)
-        self._update_canvas_wallpaper()
+        self.canvas.update_idletasks()
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
     # ------------------------------------------------------------------
     # 输出测试
     # ------------------------------------------------------------------

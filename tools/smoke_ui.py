@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""界面自检：支持分类 / 主题 / 背景，截图后退出。
+"""界面自检：支持分类 / 主题，截图后退出。
 
 用法:
-    python smoke_ui.py [分类] [输出] [--night] [--bg 图片路径]
+    python smoke_ui.py [分类] [输出] [--night] [--kw=词]
 """
 import sys
 import traceback
@@ -22,12 +22,9 @@ flags = [a for a in sys.argv[1:] if a.startswith("--")]
 CAT = args[0] if args else ""
 OUT = args[1] if len(args) > 1 else r"G:\azur lane\.tmp\shot.png"
 NIGHT = "--night" in flags
-BG = ""
 KW = ""
 for f in flags:
-    if f.startswith("--bg="):
-        BG = f.split("=", 1)[1]
-    elif f.startswith("--kw="):
+    if f.startswith("--kw="):
         KW = f.split("=", 1)[1]
 
 
@@ -44,9 +41,6 @@ def setup():
     if KW:
         app.var_kw.set(KW)
         app.refresh()
-    if BG:
-        app._bg_path = BG
-        app._load_background()
     app.lift()
     app.attributes("-topmost", True)
     app.focus_force()
