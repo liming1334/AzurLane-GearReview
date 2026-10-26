@@ -1,0 +1,28 @@
+# 构建产物
+dist/
+build/
+build_onedir/
+build_onefile/
+*.spec
+
+# 依赖（体积大，按需自行安装）
+vendor/
+
+# 运行期数据
+data/settings.json
+data/background.json
+data/background.*
+data/装备排行.csv
+.tmp/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+.DS_Store
