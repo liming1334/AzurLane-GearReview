@@ -67,6 +67,7 @@ python main.py
 app/core.py     抓取、解析、评分、舰载机武器库
 app/ui.py       界面、主题、背景、卡片详情
 main.py         入口（--selftest 联网自检）
+tests/          核心逻辑回归测试（标准库 unittest，离线可跑）
 docs/           计算逻辑 / 开发文档
 tools/          抓取、图标、截图与端到端测试脚本
 build.ps1       打包脚本
@@ -80,6 +81,16 @@ python tools/fetch_icons.py  # 重新下载图标 → assets/icons/
 ```
 
 界面里的「更新数据」按钮执行同一套流程。
+
+## 测试
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+33 条用例，只用标准库（本项目装不了 pytest）。覆盖强化档位选择、机枪射速解析、
+舰载机 77 秒架次、舰炮开火次数与对甲、以及数据体检（674 件、图标齐全）。
+其中 `TestMaxLevelTruncation` 专门钉住「白色飞机只能 +3，不能误用武器库 +13」这个历史 bug。
 
 ## 打包
 
