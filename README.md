@@ -15,7 +15,7 @@
 
 | 发布包 | 说明 |
 |---|---|
-| [GitHub Releases](https://github.com/liming1334/AzurLane-GearReview/releases) | 下载 `碧蓝装备排行_单文件版.exe`，双击即用，约 16 MB |
+| [GitHub Releases](https://github.com/liming1334/AzurLane-GearReview/releases) | 下载最新 Release 中的单文件版 exe（当前为 `v1.0.0.exe`），双击即用，约 16 MB |
 
 > 单文件版首次启动会解压到系统临时目录，约 3~5 秒；个别杀毒软件可能误报，加入白名单即可。
 > 数据与图标已内置，**断网也能用**；只有「更新数据」按钮需要联网。
@@ -37,7 +37,7 @@
 ## 快速开始
 
 从 [GitHub Releases](https://github.com/liming1334/AzurLane-GearReview/releases) 下载
-`碧蓝装备排行_单文件版.exe`，双击运行。
+单文件版 exe（当前为 `v1.0.0.exe`），双击运行。
 
 从源码运行：
 

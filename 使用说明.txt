@@ -6,7 +6,7 @@
 
 一、怎么运行
 --------------------------------
-【单文件版】从 GitHub Releases 下载 碧蓝装备排行_单文件版.exe
+【单文件版】从 GitHub Releases 下载单文件版 exe（当前文件名 v1.0.0.exe）
 下载地址：https://github.com/liming1334/AzurLane-GearReview/releases
 
 · 就一个文件，双击直接用，方便发给别人
