@@ -12,7 +12,8 @@ import sys
 import time
 from ctypes import wintypes
 
-sys.path.insert(0, r"G:\azur lane")
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
 
 # 必须先声明 DPI 感知：否则 GetWindowRect 返回逻辑坐标，和 ImageGrab 的物理像素对不上，
 # 截出来的图会整体错位
@@ -54,6 +55,6 @@ def shoot(category: str, theme: str, out: str):
     app.destroy()
 
 
-shoot("舰炮", "day", r"G:\azur lane\assets\preview.png")
+shoot("舰炮", "day", os.path.join(ROOT, "assets", "preview.png"))
 time.sleep(0.5)
-shoot("舰载机", "night", r"G:\azur lane\assets\preview_night.png")
+shoot("舰载机", "night", os.path.join(ROOT, "assets", "preview_night.png"))

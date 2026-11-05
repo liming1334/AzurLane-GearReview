@@ -4,7 +4,9 @@
 用法:
     python smoke_ui.py [分类] [输出] [--night] [--kw=词]
 """
+import os
 import sys
+import tempfile
 import traceback
 
 try:
@@ -13,14 +15,15 @@ try:
 except Exception:
     pass
 
-sys.path.insert(0, r"G:\azur lane")
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
 
 from app import ui  # noqa: E402
 
 args = [a for a in sys.argv[1:] if not a.startswith("--")]
 flags = [a for a in sys.argv[1:] if a.startswith("--")]
 CAT = args[0] if args else ""
-OUT = args[1] if len(args) > 1 else r"G:\azur lane\.tmp\shot.png"
+OUT = args[1] if len(args) > 1 else os.path.join(tempfile.gettempdir(), "shot.png")
 NIGHT = "--night" in flags
 KW = ""
 for f in flags:

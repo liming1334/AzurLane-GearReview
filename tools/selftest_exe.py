@@ -6,11 +6,13 @@
 import os
 import subprocess
 import sys
+import tempfile
 
-EXE_DEFAULT = r"G:\azur lane\dist\碧蓝装备排行\碧蓝装备排行.exe"
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+EXE_DEFAULT = os.path.join(ROOT, "打包", "碧蓝装备排行_单文件版.exe")
 
 exe = sys.argv[1] if len(sys.argv) > 1 else EXE_DEFAULT
-temp = sys.argv[2] if len(sys.argv) > 2 else r"G:\azur lane\.tmp"
+temp = sys.argv[2] if len(sys.argv) > 2 else tempfile.gettempdir()
 
 env = dict(os.environ)
 env["TEMP"] = env["TMP"] = temp

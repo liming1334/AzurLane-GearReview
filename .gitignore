@@ -1,11 +1,8 @@
-# 构建产物
-dist/
+# 构建中间产物
 build/
-build_onedir/
-build_onefile/
 *.spec
 
-# 依赖（体积大，按需自行安装）
+# 本地依赖（按需安装，不入库）
 vendor/
 
 # 运行期数据
@@ -13,10 +10,9 @@ data/settings.json
 data/background.json
 data/background.*
 data/装备排行.csv
-.tmp/
 
-# 用户放进来的原图（assets/app_source.jpg 是入库的正式副本）
-azur lane.jpg
+# 本地打包输出（发布时上传到 GitHub Releases，不入库）
+打包/
 
 # Python
 __pycache__/

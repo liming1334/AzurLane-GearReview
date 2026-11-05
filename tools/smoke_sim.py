@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """自检：打开 60 秒输出弹窗并截图。"""
+import os
 import sys
+import tempfile
 import traceback
 
 try:
@@ -9,7 +11,8 @@ try:
 except Exception:
     pass
 
-sys.path.insert(0, r"G:\azur lane")
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
 
 from app import ui  # noqa: E402
 
@@ -37,7 +40,7 @@ def shoot():
             x, y = win.winfo_rootx(), win.winfo_rooty()
             w_, h_ = win.winfo_width(), win.winfo_height()
             img = ImageGrab.grab(bbox=(x, y, x + w_, y + h_))
-            out = r"G:\azur lane\.tmp\sim_shot.png"
+            out = os.path.join(tempfile.gettempdir(), "sim_shot.png")
             img.save(out)
             print("sim screenshot:", out, img.size)
         else:

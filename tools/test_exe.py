@@ -9,9 +9,11 @@ import ctypes.wintypes as wt
 import os
 import subprocess
 import sys
+import tempfile
 import time
 
-EXE_DEFAULT = r"G:\azur lane\dist\碧蓝装备排行\碧蓝装备排行.exe"
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+EXE_DEFAULT = os.path.join(ROOT, "打包", "碧蓝装备排行_单文件版.exe")
 TITLE_KEY = "装备性能排行"
 
 user32 = ctypes.windll.user32
@@ -38,8 +40,8 @@ def find_window(key):
 
 def main():
     exe = sys.argv[1] if len(sys.argv) > 1 else EXE_DEFAULT
-    temp = sys.argv[2] if len(sys.argv) > 2 else r"G:\azur lane\.tmp"
-    out = sys.argv[3] if len(sys.argv) > 3 else r"G:\azur lane\.tmp\exe_shot.png"
+    temp = sys.argv[2] if len(sys.argv) > 2 else tempfile.gettempdir()
+    out = sys.argv[3] if len(sys.argv) > 3 else os.path.join(temp, "exe_shot.png")
 
     env = dict(os.environ)
     env["TEMP"] = env["TMP"] = temp
@@ -63,7 +65,7 @@ def main():
     print("窗口标题:", title)
     time.sleep(3.0)
 
-    sys.path.insert(0, r"G:\azur lane\tools")
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import capture
     img = capture.grab(hwnd)
     img.save(out)

@@ -3,33 +3,41 @@
 ![应用图标](assets/app.png)
 
 抓取 [碧蓝航线 WIKI](https://wiki.biligame.com/blhx/%E8%A3%85%E5%A4%87%E5%9B%BE%E9%89%B4) 的全部装备数据，
-按伤害公式计算 **77 秒窗口内的累计伤害** 并自动排序，带图标、网页同款详情与白天/夜间主题。
+按伤害公式计算 **77 秒窗口内的累计伤害** 并自动排序，带图标、卡片式详情与白天/夜间主题。
 
-仓库：[liming1334/AzurLane-GearReview](https://github.com/liming1334/AzurLane-GearReview)
+**Windows 10 / 11 ｜ 免安装 ｜ 离线可用**
 
-![白天主题](assets/preview.png)
+| 白天 | 夜间 |
+|---|---|
+| ![白天主题](assets/preview.png) | ![夜间主题](assets/preview_night.png) |
 
-![夜间主题](assets/preview_night.png)
+## 下载
 
-## 特性
+| 发布包 | 说明 |
+|---|---|
+| [GitHub Releases](https://github.com/liming1334/AzurLane-GearReview/releases) | 下载 `碧蓝装备排行_单文件版.exe`，双击即用，约 16 MB |
+
+> 单文件版首次启动会解压到系统临时目录，约 3~5 秒；个别杀毒软件可能误报，加入白名单即可。
+> 数据与图标已内置，**断网也能用**；只有「更新数据」按钮需要联网。
+
+## 功能
 
 - **674 件装备**：舰炮 296、舰载机 177、防空炮 119、鱼雷 80、导弹 2
 - **统一评分口径**：舰炮/导弹/鱼雷/防空炮/舰载机全部按 77 秒累计伤害排名
 - **逐级强化**：无强化 ~ +13，装备达不到自动回退到自身最高档
   （白色飞机只能到 +3，不会误用 +13 的数值；白/蓝按稀有度上限截断页面虚高档位）
 - **四种评分维度**：对空 / 轻甲 / 中甲 / 重甲，可分别排序
+- **筛选与搜索**：分类 / 类型 / 稀有度 / 阵营 / 鱼雷弹药 / 关键词
 - **卡片式详情**：图标、标签、评分卡、计算过程、舰载挂载、技能、完整属性
+- **输出测试**：任意时长（默认 77 秒）的总输出与等效秒伤
+- **导出 CSV**：把当前排行表导出成表格
 - **白天 / 夜间主题**：白色 + 天蓝 / 灰黑 + 深蓝（输入框 #305973），一键切换并记忆
 - **离线可用**：数据与图标内置；「更新数据」可联网重抓
-- **输出测试**：任意时长（默认 77 秒）的总输出与等效秒伤
 
 ## 快速开始
 
-双击 `dist/碧蓝装备排行/碧蓝装备排行.exe`（免解压版，整个文件夹一起移动）。
-
-> 单文件版会解压到系统临时目录，在受限环境下会报
-> `could not create temporary directory!`，因此默认提供免解压版；
-> 需要单文件可用 `build.ps1 -OneFile` 自行生成。
+从 [GitHub Releases](https://github.com/liming1334/AzurLane-GearReview/releases) 下载
+`碧蓝装备排行_单文件版.exe`，双击运行。
 
 从源码运行：
 
@@ -64,15 +72,19 @@ python main.py
 ## 目录结构
 
 ```
-app/core.py     抓取、解析、评分、舰载机武器库
-app/ui.py       界面、主题、卡片详情
-main.py         入口（--selftest 联网自检）
-tests/          回归测试（核心逻辑 + 界面，标准库 unittest，离线可跑）
+app/            核心逻辑与界面
+assets/         图标、预览图
+data/           装备数据
 docs/           计算逻辑 / 开发文档
-tools/          抓取、图标、截图与端到端测试脚本
-  make_icon.py  从原图生成 assets/app.ico（16~256 七个尺寸）
-build.ps1       打包脚本
+tests/          回归测试
+tools/          抓取、图标、截图与端到端脚本
+main.py         程序入口
+build.ps1       单文件打包脚本
+使用说明.txt     用户说明
 ```
+
+`vendor/` 是本地打包依赖（PyInstaller 等），不入库；需要重新打包时可保留或自行安装。
+`打包/` 是 `build.ps1` 的本地输出目录，同样不入库；发布时把 exe 上传到 GitHub Releases。
 
 ## 数据更新
 
@@ -89,7 +101,7 @@ python tools/fetch_icons.py  # 重新下载图标 → assets/icons/
 python -m unittest discover -s tests -v
 ```
 
-49 条用例，只用标准库（本项目装不了 pytest）。覆盖强化档位选择、机枪射速解析、
+共 **68 条用例**，只用标准库（本项目装不了 pytest）。覆盖强化档位选择、机枪射速解析、
 舰载机 77 秒架次、舰炮开火次数与对甲、以及数据体检（674 件、图标齐全）。
 其中 `TestMaxLevelTruncation` 专门钉住「白色飞机只能 +3，不能误用武器库 +13」这个历史 bug，
 `TestEffectiveMaxLevel` 钉住白/蓝按稀有度上限截断、紫及以上不动，
@@ -99,9 +111,15 @@ python -m unittest discover -s tests -v
 ## 打包
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File build.ps1            # 免解压版（推荐）
-powershell -ExecutionPolicy Bypass -File build.ps1 -OneFile   # 单文件版
+powershell -ExecutionPolicy Bypass -File build.ps1
 ```
+
+输出：`打包/碧蓝装备排行_单文件版.exe`（本地目录，已在 `.gitignore` 中忽略）。
+
+发布时把生成的 exe 上传到 GitHub Releases，不要提交进 Git 仓库。
+
+打包依赖 PyInstaller；仓库内可保留本地的 `vendor/`，或先执行 `pip install pyinstaller`。
+单文件模式启动时需要可写的临时目录；若运行环境不允许，可改用 `python main.py` 从源码运行。
 
 ## 开源协议
 
